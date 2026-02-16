@@ -15,7 +15,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use fuser::FileType;
+use fuser::{FileType, INodeNo};
 use napi::{bindgen_prelude::{Buffer, FnArgs, Promise}, threadsafe_function::ThreadsafeFunction};
 use napi_derive::napi;
 
@@ -200,7 +200,7 @@ impl FileAttr {
       flags: self.flags,
       gid: self.gid,
       uid: self.uid,
-      ino: self.ino as u64,
+      ino: INodeNo(self.ino as u64),
       kind: to_file_type(&self.kind),
       mtime,
       nlink: 1,

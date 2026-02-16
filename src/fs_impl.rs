@@ -13,10 +13,9 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::{ffi::OsStr, path::Path, sync::mpsc::channel, time::{Duration, SystemTime}};
-use libc::{ENOSYS, EPERM, c_int};
+use std::{io, ffi::OsStr, sync::mpsc::channel, time::{Duration, SystemTime}};
 
-use fuser::{FUSE_ROOT_ID, Filesystem, KernelConfig, PollHandle, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyIoctl, ReplyLock, ReplyLseek, ReplyOpen, ReplyPoll, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, fuse_forget_one};
+use fuser::{AccessFlags, BsdFileFlags, Errno, FileHandle, Filesystem, FopenFlags, Generation, INodeNo, KernelConfig, LockOwner, OpenFlags, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyXattr, Request, TimeOrNow};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 
 use crate::js_callbacks::*;
@@ -83,7 +82,7 @@ macro_rules! call_js {
       );
       match rx_done_signal.recv_timeout(Duration::from_secs(30)) {
         Ok(Some(js_reply)) => ($with_reply)(js_reply),
-        _ => $reply.error(EIO),
+        _ => $reply.error(Errno::EIO),
       }
     }
   };
@@ -97,12 +96,12 @@ macro_rules! call_js {
             let _ = env.spawn_future(async move {
               match js_reply.await {
                 Ok(js_reply) => ($with_reply)(js_reply),
-                Err(_) => $reply.error(EIO),
+                Err(_) => $reply.error(Errno::EIO),
               };
               Ok(())
             });
           },
-          Err(_) => $reply.error(EIO)
+          Err(_) => $reply.error(Errno::EIO)
         };
         Ok(())
       }
@@ -110,28 +109,24 @@ macro_rules! call_js {
   };
 }
 
-const EIO: c_int = 5;
-
-fn to_opt_i64(x: Option<u64>) -> Option<i64> {
-  match x { Some(n) => Some(n as i64), _ => None }
+fn fh_opt_i64(x: Option<FileHandle>) -> Option<i64> {
+  match x { Some(n) => Some(n.0 as i64), _ => None }
+}
+fn lo_opt_i64(x: Option<LockOwner>) -> Option<i64> {
+  match x { Some(n) => Some(n.0 as i64), _ => None }
 }
 fn str_from_os(s: &OsStr) -> String {
   s.to_str().unwrap().to_string()
 }
-
-macro_rules! send_err {
-  ($code:expr, $reply:ident) => {
-    {
-      $reply.error($code);
-    }
-  }
+fn to_opt_u32(x: Option<BsdFileFlags>) -> Option<u32> {
+  match x { Some(n) => Some(n.bits()), _ => None }
 }
 
 fn send_xattr(xattr: XAttrBytesOrErr, reply: ReplyXattr) {
   match xattr {
     XAttrBytesOrErr::Data(data) => reply.data(&data),
     XAttrBytesOrErr::Size(size) => reply.size(size),
-    XAttrBytesOrErr::Err(code) => send_err!(code, reply),
+    XAttrBytesOrErr::Err(code) => reply.error(Errno::from_i32(code)),
   };
 }
 
@@ -139,8 +134,8 @@ const TTL: Duration = Duration::from_secs(1);
 
 impl Filesystem for CallbacksProxy {
 
-  fn init(&mut self, _req: &Request<'_>, _config: &mut KernelConfig) -> Result<(), c_int> {
-    call_js!(self.cbs.init, (FUSE_ROOT_ID as i64));
+  fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> io::Result<()> {
+    call_js!(self.cbs.init, (INodeNo::ROOT.0 as i64));
     Ok(())
   }
 
@@ -148,44 +143,38 @@ impl Filesystem for CallbacksProxy {
     call_js!(self.cbs.destroy);
   }
 
-  fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
+  fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
     call_js!(
-      self.cbs.lookup, (parent as i64, str_from_os(name)), FileAttrOrErr, reply,
+      self.cbs.lookup, (parent.0 as i64, str_from_os(name)), FileAttrOrErr, reply,
       @initial-thread => |js_reply| {
         match js_reply {
-          FileAttrOrErr::Attr(attrs) => reply.entry(&TTL, &attrs.into_fuse(), 0),
-          FileAttrOrErr::Err(code) => send_err!(code, reply),
+          FileAttrOrErr::Attr(attrs) => reply.entry(&TTL, &attrs.into_fuse(), Generation(0)),
+          FileAttrOrErr::Err(code) => reply.error(Errno::from_i32(code)),
         }
       }
     );
   }
 
-  fn forget(&mut self, _req: &Request<'_>, ino: u64, nlookup: u64) {
-    call_js!(self.cbs.forget, (ino as i64, nlookup as i64));
+  fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
+    call_js!(self.cbs.forget, (ino.0 as i64, nlookup as i64));
   }
 
-  fn batch_forget(&mut self, req: &Request<'_>, nodes: &[fuse_forget_one]) {
-    for node in nodes {
-      self.forget(req, node.nodeid, node.nlookup);
-    }
-  }
-
-  fn getattr(&mut self, _req: &Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
+  fn getattr(&self, _req: &Request, ino: INodeNo, fh: Option<FileHandle>, reply: ReplyAttr) {
     call_js!(
-      self.cbs.getattr, (ino as i64, to_opt_i64(fh)), FileAttrOrErr, reply,
+      self.cbs.getattr, (ino.0 as i64, fh_opt_i64(fh)), FileAttrOrErr, reply,
       @initial-thread => |js_reply| {
         match js_reply {
           FileAttrOrErr::Attr(attrs) => reply.attr(&TTL, &attrs.into_fuse()),
-          FileAttrOrErr::Err(code) => send_err!(code, reply),
+          FileAttrOrErr::Err(code) => reply.error(Errno::from_i32(code)),
         }
       }
     );
   }
 
   fn setattr(
-    &mut self,
-    _req: &Request<'_>,
-    ino: u64,
+    &self,
+    _req: &Request,
+    ino: INodeNo,
     mode: Option<u32>,
     uid: Option<u32>,
     gid: Option<u32>,
@@ -193,27 +182,27 @@ impl Filesystem for CallbacksProxy {
     _atime: Option<TimeOrNow>,
     _mtime: Option<TimeOrNow>,
     _ctime: Option<SystemTime>,
-    fh: Option<u64>,
+    fh: Option<FileHandle>,
     _crtime: Option<SystemTime>,
     _chgtime: Option<SystemTime>,
     _bkuptime: Option<SystemTime>,
-    flags: Option<u32>,
+    flags: Option<BsdFileFlags>,
     reply: ReplyAttr,
   ) {
-    let changes = AttrChanges { mode, uid, gid, flags };
+    let changes = AttrChanges { mode, uid, gid, flags: to_opt_u32(flags) };
     call_js!(
-      self.cbs.setattr, (ino as i64, to_opt_i64(fh), changes), FileAttrOrErr, reply,
+      self.cbs.setattr, (ino.0 as i64, fh_opt_i64(fh), changes), FileAttrOrErr, reply,
       @initial-thread => |js_reply| {
         match js_reply {
           FileAttrOrErr::Attr(attrs) => reply.attr(&TTL, &attrs.into_fuse()),
-          FileAttrOrErr::Err(code) => send_err!(code, reply),
+          FileAttrOrErr::Err(code) => reply.error(Errno::from_i32(code)),
         }
       }
     );
   }
 
-  fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: ReplyData) {
-    send_err!(ENOSYS, reply);
+  fn readlink(&self, _req: &Request, _ino: INodeNo, reply: ReplyData) {
+    reply.error(Errno::ENOSYS);
   }
 
   // fn mknod(
@@ -316,36 +305,44 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  fn open(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+  fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
     call_js!(
-      self.cbs.open, (ino as i64, flags), ParamsOfOpenedOrErr, reply,
+      self.cbs.open, (ino.0 as i64, flags.0), ParamsOfOpenedOrErr, reply,
       @initial-thread => |js_reply| {
         match js_reply {
-          ParamsOfOpenedOrErr::Params(params) => reply.opened(params.fh as u64, params.flags),
-          ParamsOfOpenedOrErr::Err(code) => send_err!(code, reply),
+          ParamsOfOpenedOrErr::Params(params) => match FopenFlags::from_bits(params.flags) {
+            Some(flags) => reply.opened(FileHandle(params.fh as u64), flags),
+            None => reply.error(Errno::EIO)
+          },
+          ParamsOfOpenedOrErr::Err(code) => reply.error(Errno::from_i32(code)),
         }
       }
     );
   }
 
   fn read(
-    &mut self,
-    _req: &Request<'_>,
-    ino: u64,
-    fh: u64,
-    offset: i64,
+    &self,
+    _req: &Request,
+    ino: INodeNo,
+    fh: FileHandle,
+    offset: u64,
     size: u32,
-    flags: i32,
-    lock_owner: Option<u64>,
+    flags: OpenFlags,
+    lock_owner: Option<LockOwner>,
     reply: ReplyData,
   ) {
-    let args = ReadArgs { offset, size, flags, lock_owner: to_opt_i64(lock_owner) };
+    let args = ReadArgs {
+      offset: offset as i64,
+      size,
+      flags: flags.0,
+      lock_owner: lo_opt_i64(lock_owner)
+    };
     call_js!(
-      self.cbs.read, (ino as i64, fh as i64, args), BufferOrErr, reply,
+      self.cbs.read, (ino.0 as i64, fh.0 as i64, args), BufferOrErr, reply,
       @initial-thread => |js_reply| {
         match js_reply {
           BufferOrErr::Ok(data) => reply.data(&data),
-          BufferOrErr::Err(code) => send_err!(code, reply),
+          BufferOrErr::Err(code) => reply.error(Errno::from_i32(code)),
         }
       }
     );
@@ -378,18 +375,22 @@ impl Filesystem for CallbacksProxy {
   // }
 
   fn release(
-    &mut self,
-    _req: &Request<'_>,
-    ino: u64,
-    fh: u64,
-    flags: i32,
-    lock_owner: Option<u64>,
+    &self,
+    _req: &Request,
+    ino: INodeNo,
+    fh: FileHandle,
+    flags: OpenFlags,
+    lock_owner: Option<LockOwner>,
     flush: bool,
     reply: ReplyEmpty,
   ) {
-    let args = ReleaseArgs { flags, flush, lock_owner: to_opt_i64(lock_owner) };
+    let args = ReleaseArgs {
+      flags: flags.0,
+      flush,
+      lock_owner: lo_opt_i64(lock_owner)
+    };
     call_js!(
-      self.cbs.release, (ino as i64, fh as i64, args), (), reply,
+      self.cbs.release, (ino.0 as i64, fh.0 as i64, args), (), reply,
       @initial-thread => |_| { reply.ok(); }
     );
   }
@@ -401,40 +402,45 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  fn opendir(&mut self, _req: &Request<'_>, ino: u64, flags: i32, reply: ReplyOpen) {
+  fn opendir(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
     call_js!(
-      self.cbs.opendir, (ino as i64, flags), ParamsOfOpenedOrErr, reply,
+      self.cbs.opendir, (ino.0 as i64, flags.0), ParamsOfOpenedOrErr, reply,
       @initial-thread => |js_reply| {
         match js_reply {
-          ParamsOfOpenedOrErr::Params(params) => reply.opened(params.fh as u64, params.flags),
-          ParamsOfOpenedOrErr::Err(code) => send_err!(code, reply),
+          ParamsOfOpenedOrErr::Params(params) => match FopenFlags::from_bits(params.flags) {
+            Some(flags) => reply.opened(FileHandle(params.fh as u64), flags),
+            None => reply.error(Errno::EIO)
+          }
+          ParamsOfOpenedOrErr::Err(code) => reply.error(Errno::from_i32(code)),
         }
       }
     );
   }
 
   fn readdir(
-    &mut self,
-    _req: &Request<'_>,
-    ino: u64,
-    fh: u64,
-    offset: i64,
+    &self,
+    _req: &Request,
+    ino: INodeNo,
+    fh: FileHandle,
+    offset: u64,
     mut reply: ReplyDirectory,
   ) {
     call_js!(
-      self.cbs.readdir, (ino as i64, fh as i64, offset), DirListing, reply,
+      self.cbs.readdir, (ino.0 as i64, fh.0 as i64, offset as i64), DirListing, reply,
       @initial-thread => |js_reply| {
         match js_reply {
           DirListing::Lst(lst) => {
             for entry in lst {
-              let buffer_full = reply.add(ino, entry.offset, to_file_type(&entry.kind), &&OsStr::new(&entry.name));
+              let buffer_full = reply.add(
+                ino, entry.offset as u64, to_file_type(&entry.kind), &&OsStr::new(&entry.name)
+              );
               if buffer_full {
                 break;
               }
             }
             reply.ok();
           },
-          DirListing::Err(code) => send_err!(code, reply),
+          DirListing::Err(code) => reply.error(Errno::from_i32(code)),
         }
       }
     );
@@ -455,15 +461,15 @@ impl Filesystem for CallbacksProxy {
   // }
 
   fn releasedir(
-    &mut self,
-    _req: &Request<'_>,
-    ino: u64,
-    fh: u64,
-    flags: i32,
+    &self,
+    _req: &Request,
+    ino: INodeNo,
+    fh: FileHandle,
+    flags: OpenFlags,
     reply: ReplyEmpty,
   ) {
     call_js!(
-      self.cbs.releasedir, (ino as i64, fh as i64, flags), (), reply,
+      self.cbs.releasedir, (ino.0 as i64, fh.0 as i64, flags.0), (), reply,
       @initial-thread => |_| { reply.ok(); }
     );
   }
@@ -482,7 +488,7 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
+  fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
     reply.statfs(0, 0, 0, 0, 0, BLOCK_SIZE as u32, 255, BLOCK_SIZE as u32);
   }
 
@@ -504,22 +510,22 @@ impl Filesystem for CallbacksProxy {
   // }
 
   fn getxattr(
-    &mut self,
-    _req: &Request<'_>,
-    ino: u64,
+    &self,
+    _req: &Request,
+    ino: INodeNo,
     name: &OsStr,
     size: u32,
     reply: ReplyXattr,
   ) {
     call_js!(
-      self.cbs.getxattr, (ino as i64, str_from_os(name), size), XAttrBytesOrErr, reply,
+      self.cbs.getxattr, (ino.0 as i64, str_from_os(name), size), XAttrBytesOrErr, reply,
       @initial-thread => |js_reply| { send_xattr(js_reply, reply); }
     );
   }
 
-  fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: ReplyXattr) {
+  fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
     call_js!(
-      self.cbs.listxattr, (ino as i64, size), XAttrBytesOrErr, reply,
+      self.cbs.listxattr, (ino.0 as i64, size), XAttrBytesOrErr, reply,
       @initial-thread => |js_reply| { send_xattr(js_reply, reply); }
     );
   }
@@ -532,14 +538,14 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  fn access(&mut self, _req: &Request<'_>, ino: u64, mask: i32, reply: ReplyEmpty) {
+  fn access(&self, _req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
     call_js!(
-      self.cbs.access, (ino as i64, mask), i32, reply,
+      self.cbs.access, (ino.0 as i64, mask.bits()), i32, reply,
       @initial-thread => |err_code| {
         if err_code == 0 {
           reply.ok();
         } else {
-          send_err!(err_code, reply);
+          reply.error(Errno::from_i32(err_code));
         }
       }
     );

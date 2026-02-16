@@ -1,6 +1,6 @@
 {
   "name": "napi-fuser",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Module with fuser, FUSE for Rust, mounting into Linux and Mac.",
   "main": "index.js",
   "repository": {
@@ -31,7 +31,6 @@
   },
   "scripts": {
     "build": "napi build --platform --release",
-    "build-all-targets": "bash build-all-cross-compiled.sh",
     "build:debug": "napi build --platform",
     "format": "run-p format:prettier format:rs format:toml",
     "format:prettier": "prettier . -w",

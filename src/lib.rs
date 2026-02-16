@@ -22,7 +22,7 @@ use std::{path::Path, sync::mpsc::{Sender, channel}, thread};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use fuser::{MountOption, spawn_mount2};
+use fuser::{Config, MountOption, SessionACL, spawn_mount2};
 
 use crate::{fs_impl::CallbacksProxy, js_callbacks::*};
 
@@ -62,15 +62,14 @@ impl JsFSMounter {
     let (tx_unmount_signal, rx_unmount_signal) = channel::<()>();
 
     thread::spawn(move || {
-      let mounting = spawn_mount2(
-        fs_impl,
-        Path::new(&mount_root),
-        &[MountOption::FSName(fs_name)]
-      );
+      let mut cfg = Config::default();
+      cfg.mount_options.extend([MountOption::RO, MountOption::FSName(fs_name)]);
+      cfg.acl = SessionACL::Owner;
+      let mounting = spawn_mount2(fs_impl, Path::new(&mount_root), &cfg);
       match mounting {
         Ok(mount_session) => {
           rx_unmount_signal.recv().unwrap_or(());
-          mount_session.join();
+          let _ = mount_session.join();
         },
         _ => ()
       }
