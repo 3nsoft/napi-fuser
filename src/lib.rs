@@ -69,7 +69,7 @@ impl JsFSMounter {
       match mounting {
         Ok(mount_session) => {
           rx_unmount_signal.recv().unwrap_or(());
-          let _ = mount_session.join();
+          let _ = mount_session.umount_and_join();
         },
         _ => ()
       }
