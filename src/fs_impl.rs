@@ -13,9 +13,9 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::{io, ffi::OsStr, sync::mpsc::channel, time::{Duration, SystemTime}};
+use std::{ffi::OsStr, io, path::Path, sync::mpsc::channel, time::{Duration, SystemTime}};
 
-use fuser::{AccessFlags, BsdFileFlags, Errno, FileHandle, Filesystem, FopenFlags, Generation, INodeNo, KernelConfig, LockOwner, OpenFlags, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyXattr, Request, TimeOrNow};
+use fuser::{AccessFlags, BsdFileFlags, Errno, FileHandle, Filesystem, FopenFlags, Generation, INodeNo, KernelConfig, LockOwner, OpenFlags, RenameFlags, ReplyAttr, ReplyBmap, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyLock, ReplyOpen, ReplyStatfs, ReplyXattr, Request, TimeOrNow};
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 
 use crate::js_callbacks::*;
@@ -130,6 +130,14 @@ fn send_xattr(xattr: XAttrBytesOrErr, reply: ReplyXattr) {
   };
 }
 
+fn send_empty(err_code: i32, reply: ReplyEmpty) {
+  if err_code == 0 {
+    reply.ok();
+  } else {
+    reply.error(Errno::from_i32(err_code));
+  }
+}
+
 const TTL: Duration = Duration::from_secs(1);
 
 impl Filesystem for CallbacksProxy {
@@ -205,105 +213,77 @@ impl Filesystem for CallbacksProxy {
     reply.error(Errno::ENOSYS);
   }
 
-  // fn mknod(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   parent: u64,
-  //   name: &OsStr,
-  //   mode: u32,
-  //   umask: u32,
-  //   rdev: u32,
-  //   reply: ReplyEntry,
-  // ) {
-  //   let name_str = name.display().to_string();
-  //   js_call!(self.cbs.test, "mknod", {
-  //     println!("🧐 fuser.mknod(parent: {parent:#x?}, name: {name_str:?}, \
-  //       mode: {mode}, umask: {umask:#x?}, rdev: {rdev})"
-  //     );
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn mknod(
+    &self, _req: &Request, parent: INodeNo, name: &OsStr, mode: u32, umask: u32, rdev: u32, reply: ReplyEntry
+  ) {
+    let name_str = name.display().to_string();
+    call_js!(
+      self.cbs.mknod, (parent.0 as i64, name_str, mode, umask, rdev), NewEntryOrErr, reply,
+      @initial-thread => |js_reply| {
+        match js_reply {
+          NewEntryOrErr::Entry(r) => reply.entry(
+            &Duration::from_millis(r.ttl as u64), &r.attr.into_fuse(), Generation(r.generation as u64)
+          ),
+          NewEntryOrErr::Err(code) => reply.error(Errno::from_i32(code)),
+        }
+      }
+    )
+  }
 
-  // fn mkdir(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   parent: u64,
-  //   name: &OsStr,
-  //   mode: u32,
-  //   umask: u32,
-  //   reply: ReplyEntry,
-  // ) {
-  //   let name_str = name.display().to_string();
-  //   js_call!(self.cbs.test, "mkdir", {
-  //     println!("🧐 fuser.mkdir(parent: {parent:#x?}, name: {name_str:?}, mode: {mode}, umask: {umask:#x?})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn mkdir(
+    &self, _req: &Request, parent: INodeNo, name: &OsStr, mode: u32, umask: u32, reply: ReplyEntry
+  ) {
+    let name_str = name.display().to_string();
+    call_js!(
+      self.cbs.mkdir, (parent.0 as i64, name_str, mode, umask), NewEntryOrErr, reply,
+      @initial-thread => |js_reply| {
+        match js_reply {
+          NewEntryOrErr::Entry(r) => reply.entry(
+            &Duration::from_millis(r.ttl as u64), &r.attr.into_fuse(), Generation(r.generation as u64)
+          ),
+          NewEntryOrErr::Err(code) => reply.error(Errno::from_i32(code)),
+        }
+      }
+    )
+  }
 
-  // fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-  //   let name_str = name.display().to_string();
-  //   js_call!(self.cbs.test, "unlink", {
-  //     println!("🧐 fuser.unlink(parent: {parent:#x?}, name: {name_str:?})",);
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+    let name_str = name.display().to_string();
+    call_js!(
+      self.cbs.unlink, (parent.0 as i64, name_str), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
+    );
+  }
 
-  // fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-  //   let name_str = name.display().to_string();
-  //   js_call!(self.cbs.test, "rmdir", {
-  //     println!("🧐 fuser.rmdir(parent: {parent:#x?}, name: {name_str:?})",);
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+    let name_str = name.display().to_string();
+    call_js!(
+      self.cbs.rmdir, (parent.0 as i64, name_str), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
+    );
+  }
 
-  // fn symlink(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   parent: u64,
-  //   link_name: &OsStr,
-  //   target: &Path,
-  //   reply: ReplyEntry,
-  // ) {
-  //   let link_name_str = link_name.display().to_string();
-  //   let target_str = target.display().to_string();
-  //   js_call!(self.cbs.test, "symlink", {
-  //     println!("🧐 fuser.symlink(parent: {parent:#x?}, link_name: {link_name_str:?}, target: {target_str:?})");
-  //     send_err!(EPERM);
-  //   });
-  // }
+  /// We don't do symbolic linking.
+  fn symlink(&self, _req: &Request, _parent: INodeNo, _link_name: &OsStr, _target: &Path, reply: ReplyEntry) {
+    reply.error(Errno::EPERM);
+  }
 
-  // fn rename(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   parent: u64,
-  //   name: &OsStr,
-  //   newparent: u64,
-  //   newname: &OsStr,
-  //   flags: u32,
-  //   reply: ReplyEmpty,
-  // ) {
-  //   let name_str = name.display().to_string();
-  //   let newname_str = newname.display().to_string();
-  //   js_call!(self.cbs.test, "rename", {
-  //     println!("🧐 fuser.rename(parent: {parent:#x?}, name: {name_str:?}, newparent: {newparent:#x?}, newname: {newname_str:?}, flags: {flags})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn rename(
+    &self, _req: &Request, parent: INodeNo, name: &OsStr, newparent: INodeNo, newname: &OsStr,
+    flags: RenameFlags, reply: ReplyEmpty,
+  ) {
+    let name_str = name.display().to_string();
+    let newname_str = newname.display().to_string();
+    call_js!(
+      self.cbs.rename, (parent.0 as i64, name_str, newparent.0 as i64, newname_str, flags.bits()), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
+    );
+  }
 
-  // fn link(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   ino: u64,
-  //   newparent: u64,
-  //   newname: &OsStr,
-  //   reply: ReplyEntry,
-  // ) {
-  //   let newname_str = newname.display().to_string();
-  //   js_call!(self.cbs.test, "link", {
-  //     println!("🧐 fuser.link(ino: {ino:#x?}, newparent: {newparent:#x?}, newname: {newname_str:?})");
-  //     send_err!(EPERM);
-  //   });
-  // }
+  /// We don't do linking.
+  fn link(&self, _req: &Request, _ino: INodeNo, _newparent: INodeNo, _newname: &OsStr, reply: ReplyEntry) {
+    reply.error(Errno::EPERM);
+  }
 
   fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
     call_js!(
@@ -321,15 +301,8 @@ impl Filesystem for CallbacksProxy {
   }
 
   fn read(
-    &self,
-    _req: &Request,
-    ino: INodeNo,
-    fh: FileHandle,
-    offset: u64,
-    size: u32,
-    flags: OpenFlags,
-    lock_owner: Option<LockOwner>,
-    reply: ReplyData,
+    &self, _req: &Request, ino: INodeNo, fh: FileHandle, offset: u64, size: u32, flags: OpenFlags,
+    lock_owner: Option<LockOwner>, reply: ReplyData,
   ) {
     let args = ReadArgs {
       offset: offset as i64,
@@ -367,40 +340,32 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  // fn flush(&mut self, _req: &Request<'_>, ino: u64, fh: u64, lock_owner: u64, reply: ReplyEmpty) {
-  //   js_call!(self.cbs.test, "flush", {
-  //     println!("🧐 fuser.flush(ino: {ino:#x?}, fh: {fh}, lock_owner: {lock_owner:?})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
-
-  fn release(
-    &self,
-    _req: &Request,
-    ino: INodeNo,
-    fh: FileHandle,
-    flags: OpenFlags,
-    lock_owner: Option<LockOwner>,
-    flush: bool,
-    reply: ReplyEmpty,
-  ) {
-    let args = ReleaseArgs {
-      flags: flags.0,
-      flush,
-      lock_owner: lo_opt_i64(lock_owner)
-    };
+  fn flush(&self, _req: &Request, ino: INodeNo, fh: FileHandle, lock_owner: LockOwner, reply: ReplyEmpty) {
     call_js!(
-      self.cbs.release, (ino.0 as i64, fh.0 as i64, args), (), reply,
-      @initial-thread => |_| { reply.ok(); }
+      self.cbs.flush, (ino.0 as i64, fh.0 as i64, lock_owner.0 as i64), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
     );
   }
 
-  // fn fsync(&mut self, _req: &Request<'_>, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
-  //   js_call!(self.cbs.test, "fsync", {
-  //     println!("🧐 fuser.fsync(ino: {ino:#x?}, fh: {fh}, datasync: {datasync})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn release(
+    &self, _req: &Request, ino: INodeNo, fh: FileHandle, flags: OpenFlags,
+    lock_owner: Option<LockOwner>, flush: bool, reply: ReplyEmpty,
+  ) {
+    let args = ReleaseArgs {
+      flags: flags.0, flush, lock_owner: lo_opt_i64(lock_owner)
+    };
+    call_js!(
+      self.cbs.release, (ino.0 as i64, fh.0 as i64, args), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
+    );
+  }
+
+  fn fsync(&self, _req: &Request, ino: INodeNo, fh: FileHandle, datasync: bool, reply: ReplyEmpty) {
+    call_js!(
+      self.cbs.fsync, (ino.0 as i64, fh.0 as i64, datasync), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
+    );
+  }
 
   fn opendir(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
     call_js!(
@@ -417,14 +382,7 @@ impl Filesystem for CallbacksProxy {
     );
   }
 
-  fn readdir(
-    &self,
-    _req: &Request,
-    ino: INodeNo,
-    fh: FileHandle,
-    offset: u64,
-    mut reply: ReplyDirectory,
-  ) {
+  fn readdir(&self, _req: &Request, ino: INodeNo, fh: FileHandle, offset: u64, mut reply: ReplyDirectory) {
     call_js!(
       self.cbs.readdir, (ino.0 as i64, fh.0 as i64, offset as i64), DirListing, reply,
       @initial-thread => |js_reply| {
@@ -432,7 +390,7 @@ impl Filesystem for CallbacksProxy {
           DirListing::Lst(lst) => {
             for entry in lst {
               let buffer_full = reply.add(
-                ino, entry.offset as u64, to_file_type(&entry.kind), &&OsStr::new(&entry.name)
+                INodeNo(entry.ino as u64), entry.offset as u64, to_file_type(&entry.kind), OsStr::new(&entry.name)
               );
               if buffer_full {
                 break;
@@ -469,24 +427,17 @@ impl Filesystem for CallbacksProxy {
     reply: ReplyEmpty,
   ) {
     call_js!(
-      self.cbs.releasedir, (ino.0 as i64, fh.0 as i64, flags.0), (), reply,
-      @initial-thread => |_| { reply.ok(); }
+      self.cbs.releasedir, (ino.0 as i64, fh.0 as i64, flags.0), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
     );
   }
 
-  // fn fsyncdir(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   ino: u64,
-  //   fh: u64,
-  //   datasync: bool,
-  //   reply: ReplyEmpty,
-  // ) {
-  //   js_call!(self.cbs.test, "fsyncdir", {
-  //     println!("🧐 fuser.fsyncdir(ino: {ino:#x?}, fh: {fh}, datasync: {datasync})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn fsyncdir(&self, _req: &Request, ino: INodeNo, fh: FileHandle, datasync: bool, reply: ReplyEmpty) {
+    call_js!(
+      self.cbs.fsyncdir, (ino.0 as i64, fh.0 as i64, datasync), i32, reply,
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
+    );
+  }
 
   fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
     reply.statfs(0, 0, 0, 0, 0, BLOCK_SIZE as u32, 255, BLOCK_SIZE as u32);
@@ -509,14 +460,7 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  fn getxattr(
-    &self,
-    _req: &Request,
-    ino: INodeNo,
-    name: &OsStr,
-    size: u32,
-    reply: ReplyXattr,
-  ) {
+  fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
     call_js!(
       self.cbs.getxattr, (ino.0 as i64, str_from_os(name), size), XAttrBytesOrErr, reply,
       @initial-thread => |js_reply| { send_xattr(js_reply, reply); }
@@ -530,24 +474,18 @@ impl Filesystem for CallbacksProxy {
     );
   }
 
-  // fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
-  //   let name_str = name.display().to_string();
-  //   js_call!(self.cbs.test, "removexattr", {
-  //     println!("🧐 fuser.removexattr(ino: {ino:#x?}, name: {name_str:?})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+    let name_str = name.display().to_string();
+    call_js!(
+      self.cbs.removexattr, (ino.0 as i64, name_str), i32, reply,
+      @initial-thread => |js_reply| { send_empty(js_reply, reply); }
+    );
+  }
 
   fn access(&self, _req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
     call_js!(
       self.cbs.access, (ino.0 as i64, mask.bits()), i32, reply,
-      @initial-thread => |err_code| {
-        if err_code == 0 {
-          reply.ok();
-        } else {
-          reply.error(Errno::from_i32(err_code));
-        }
-      }
+      @initial-thread => |err_code| { send_empty(err_code, reply); }
     );
   }
 
@@ -568,49 +506,23 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  // fn getlk(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   ino: u64,
-  //   fh: u64,
-  //   lock_owner: u64,
-  //   start: u64,
-  //   end: u64,
-  //   typ: i32,
-  //   pid: u32,
-  //   reply: ReplyLock,
-  // ) {
-  //   js_call!(self.cbs.test, "getlk", {
-  //     println!("🧐 fuser.getlk(ino: {ino:#x?}, fh: {fh}, lock_owner: {lock_owner}, start: {start}, end: {end}, typ: {typ}, pid: {pid})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn getlk(
+    &self, _req: &Request, _ino: INodeNo, _fh: FileHandle, _lock_owner: LockOwner,
+    _start: u64, _end: u64, _typ: i32, _pid: u32, reply: ReplyLock,
+  ) {
+    reply.error(Errno::ENOSYS);
+  }
 
-  // fn setlk(
-  //   &mut self,
-  //   _req: &Request<'_>,
-  //   ino: u64,
-  //   fh: u64,
-  //   lock_owner: u64,
-  //   start: u64,
-  //   end: u64,
-  //   typ: i32,
-  //   pid: u32,
-  //   sleep: bool,
-  //   reply: ReplyEmpty,
-  // ) {
-  //   js_call!(self.cbs.test, "setlk", {
-  //     println!("🧐 fuser.setlk(ino: {ino:#x?}, fh: {fh}, lock_owner: {lock_owner}, start: {start}, end: {end}, typ: {typ}, pid: {pid}, sleep: {sleep})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn setlk(
+    &self, _req: &Request, _ino: INodeNo, _fh: FileHandle, _lock_owner: LockOwner,
+    _start: u64, _end: u64, _typ: i32, _pid: u32, _sleep: bool, reply: ReplyEmpty,
+  ) {
+    reply.error(Errno::ENOSYS);
+  }
 
-  // fn bmap(&mut self, _req: &Request<'_>, ino: u64, blocksize: u32, idx: u64, reply: ReplyBmap) {
-  //   js_call!(self.cbs.test, "bmap", {
-  //     println!("🧐 fuser.bmap(ino: {ino:#x?}, blocksize: {blocksize}, idx: {idx})",);
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  fn bmap(&self, _req: &Request, _ino: INodeNo, _blocksize: u32, _idx: u64, reply: ReplyBmap) {
+    reply.error(Errno::ENOSYS);
+  }
 
   // fn ioctl(
   //   &mut self,
@@ -696,12 +608,8 @@ impl Filesystem for CallbacksProxy {
   //   });
   // }
 
-  // #[cfg(target_os = "macos")]
-  // fn setvolname(&mut self, _req: &Request<'_>, name: &OsStr, reply: ReplyEmpty) {
-  //   let name_str = name.display().to_string();
-  //   js_call!(self.cbs.test, "copy_file_range", {
-  //     println!("🧐 fuser.setvolname(name: {name_str:?})");
-  //     send_err!(ENOSYS);
-  //   });
-  // }
+  #[cfg(target_os = "macos")]
+  fn setvolname(&self, _req: &Request, _name: &OsStr, reply: ReplyEmpty) {
+    reply.error(Errno::EPERM);
+  }
 }

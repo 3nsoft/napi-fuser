@@ -43,20 +43,30 @@ impl JsFSMounter {
     forget: ForgetOpCB,
     getattr: GetAttrOpCB,
     setattr: SetAttrOpCB,
+    mknod: MkNodOpCB,
+    mkdir: MkDirOpCB,
+    unlink: UnlinkOpCB,
+    rmdir: RmDirOpCB,
+    rename: RenameOpCB,
     open: OpenOpCB,
     read: ReadOpCB,
+    flush: FlushOpCB,
     release: ReleaseOpCB,
+    fsync: FSyncOpCB,
     opendir: OpenDirOpCB,
     readdir: ReadDirOpCB,
     releasedir: ReleaseDirOpCB,
+    fsyncdir: FSyncDirOpCB,
     getxattr: GetXAttrOpCB,
     listxattr: ListXAttrOpCB,
+    removexattr: RemoveXAttrOpCB,
     access: AccessOpCB,
   ) -> Result<Self> {
 
     let fs_impl = CallbacksProxy::make(CallbacksToJS {
-      init, destroy, lookup, forget, getattr, setattr, open, read, release, opendir, readdir, releasedir,
-      getxattr, listxattr, access,
+      init, destroy, lookup, forget, getattr, setattr, mknod, mkdir, unlink, rmdir, rename,
+      open, read, flush, release, fsync, opendir, readdir, releasedir, fsyncdir,
+      getxattr, listxattr, removexattr, access,
     });
 
     let (tx_unmount_signal, rx_unmount_signal) = channel::<()>();

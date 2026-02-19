@@ -62,14 +62,66 @@ pub type GetAttrOpCB = ThreadsafeFunction<FnArgs<(i64, Option<i64>)>, Promise<Fi
 
 /// setattr [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
 /// crate.
-#[napi]
 /// 
 /// Arguments:
 /// 1. ino
 /// 2. fh
 /// 
 /// Should return filesystem error code or updated attributes data.
+#[napi]
 pub type SetAttrOpCB = ThreadsafeFunction<FnArgs<(i64, Option<i64>, AttrChanges)>, Promise<FileAttrOrErr>>;
+
+/// mknod [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. parent inode id
+/// 2. name of a new child node
+/// 3. mode
+/// 4. umask
+/// 5. rdev id
+#[napi]
+pub type MkNodOpCB = ThreadsafeFunction<FnArgs<(i64, String, u32, u32, u32)>, Promise<NewEntryOrErr>>;
+
+/// mkdir [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. parent inode id
+/// 2. name of a new child
+/// 3. mode
+/// 4. umask
+#[napi]
+pub type MkDirOpCB = ThreadsafeFunction<FnArgs<(i64, String, u32, u32)>, Promise<NewEntryOrErr>>;
+
+/// unlink [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. parent inode id
+/// 2. name of a child to remove
+#[napi]
+pub type UnlinkOpCB = ThreadsafeFunction<FnArgs<(i64, String)>, Promise<i32>>;
+
+/// rmdir [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. parent inode id
+/// 2. name of a child folder to remove
+#[napi]
+pub type RmDirOpCB = ThreadsafeFunction<FnArgs<(i64, String)>, Promise<i32>>;
+
+/// rename [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. parent inode id
+/// 2. name of a child to move
+/// 3. newparent inode id
+/// 4. newname of a child in new parent
+#[napi]
+pub type RenameOpCB = ThreadsafeFunction<FnArgs<(i64, String, i64, String, u32)>, Promise<i32>>;
 
 /// open [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust crate.
 #[napi]
@@ -82,7 +134,27 @@ pub type ReadOpCB = ThreadsafeFunction<FnArgs<(i64, i64, ReadArgs)>, Promise<Buf
 /// release [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
 /// crate.
 #[napi]
-pub type ReleaseOpCB = ThreadsafeFunction<FnArgs<(i64, i64, ReleaseArgs)>, Promise<()>>;
+pub type ReleaseOpCB = ThreadsafeFunction<FnArgs<(i64, i64, ReleaseArgs)>, Promise<i32>>;
+
+/// flush [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. ino
+/// 2. fh
+/// 3. lock_owner
+#[napi]
+pub type FlushOpCB = ThreadsafeFunction<FnArgs<(i64, i64, i64)>, Promise<i32>>;
+
+/// fsync [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. ino
+/// 2. fh
+/// 3. datasync flag
+#[napi]
+pub type FSyncOpCB = ThreadsafeFunction<FnArgs<(i64, i64, bool)>, Promise<i32>>;
 
 /// opendir [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
 /// crate.
@@ -97,7 +169,17 @@ pub type ReadDirOpCB = ThreadsafeFunction<FnArgs<(i64, i64, i64)>, Promise<DirLi
 /// releasedir [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
 /// crate.
 #[napi]
-pub type ReleaseDirOpCB = ThreadsafeFunction<FnArgs<(i64, i64, i32)>, Promise<()>>;
+pub type ReleaseDirOpCB = ThreadsafeFunction<FnArgs<(i64, i64, i32)>, Promise<i32>>;
+
+/// fsyncdir [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. ino
+/// 2. fh
+/// 3. datasync flag
+#[napi]
+pub type FSyncDirOpCB = ThreadsafeFunction<FnArgs<(i64, i64, bool)>, Promise<i32>>;
 
 /// getxattr [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
 /// crate.
@@ -108,6 +190,15 @@ pub type GetXAttrOpCB = ThreadsafeFunction<FnArgs<(i64, String, u32)>, Promise<X
 /// crate.
 #[napi]
 pub type ListXAttrOpCB = ThreadsafeFunction<FnArgs<(i64, u32)>, Promise<XAttrBytesOrErr>>;
+
+/// removexattr [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust
+/// crate.
+/// 
+/// Arguments:
+/// 1. ino
+/// 2. name of xattr to remove
+#[napi]
+pub type RemoveXAttrOpCB = ThreadsafeFunction<FnArgs<(i64, String)>, Promise<i32>>;
 
 /// access [FUSE operation](https://libfuse.github.io/doxygen/structfuse__lowlevel__ops.html) using fuser Rust crate.
 #[napi]
@@ -127,14 +218,23 @@ pub struct CallbacksToJS {
   pub forget: ForgetOpCB,
   pub getattr: GetAttrOpCB,
   pub setattr: SetAttrOpCB,
+  pub mknod: MkNodOpCB,
+  pub mkdir: MkDirOpCB,
+  pub unlink: UnlinkOpCB,
+  pub rmdir: RmDirOpCB,
+  pub rename: RenameOpCB,
   pub open: OpenOpCB,
   pub read: ReadOpCB,
+  pub flush: FlushOpCB,
   pub release: ReleaseOpCB,
+  pub fsync: FSyncOpCB,
   pub opendir: OpenDirOpCB,
   pub readdir: ReadDirOpCB,
   pub releasedir: ReleaseDirOpCB,
+  pub fsyncdir: FSyncDirOpCB,
   pub getxattr: GetXAttrOpCB,
   pub listxattr: ListXAttrOpCB,
+  pub removexattr: RemoveXAttrOpCB,
   pub access: AccessOpCB,
 }
 
@@ -267,6 +367,7 @@ pub enum XAttrBytesOrErr {
 
 #[napi(object)]
 pub struct DirEntry {
+  pub ino: i64,
   pub offset: i64,
   pub kind: InodeKind,
   pub name: String
@@ -275,5 +376,24 @@ pub struct DirEntry {
 #[napi]
 pub enum DirListing {
   Lst(Vec<DirEntry>),
+  Err(i32)
+}
+
+pub struct DirEntryPlus {
+  pub offset: i64,
+  pub kind: InodeKind,
+  pub name: String,
+}
+
+#[napi(object)]
+pub struct MkNodResult {
+  pub ttl: i64,
+  pub attr: FileAttr,
+  pub generation: i64
+}
+
+#[napi]
+pub enum NewEntryOrErr {
+  Entry(MkNodResult),
   Err(i32)
 }

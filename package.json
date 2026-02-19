@@ -1,6 +1,6 @@
 {
   "name": "napi-fuser",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Module with fuser, FUSE for Rust, mounting into Linux and Mac.",
   "main": "index.js",
   "repository": {
